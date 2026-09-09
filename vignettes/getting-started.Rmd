@@ -1,0 +1,99 @@
+---
+title: "Getting started with daddyR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with daddyR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 5)
+```
+
+```{r setup}
+library(daddyR)
+```
+
+## The scientific question
+
+Given a scalar time series `x(t)`, daddyR estimates the drift and diffusion
+functions of the stochastic differential equation
+
+$$ \frac{dx}{dt} = f(x) + g(x)\,\eta(t) $$
+
+that best describes its dynamics, where $\eta(t)$ is Gaussian white noise.
+$f$ (the *drift*) governs the deterministic part of the dynamics; $g^2$ (the
+*diffusion*) governs the strength of the stochastic part. This is the method
+of Nabeel et al. (2025), *The American Naturalist* 205:E100-E117.
+
+## A worked example
+
+We'll use one of the bundled example datasets: a simulated time series from
+a simple pairwise-interaction model (the kind used throughout the original
+paper's synthetic examples).
+
+```{r}
+d <- dd_load_sample_data("scalar-pairwise")
+str(d)
+```
+
+`dd_analyse()` does the core estimation: binning the data by its own value
+and computing the average drift and diffusion within each bin.
+
+```{r}
+dd <- dd_analyse(d$x, t = d$t)
+dd
+```
+
+`dd$Dt` was chosen automatically from the series' autocorrelation time,
+since we didn't specify one (see `?dd_analyse` and `DESIGN_DECISIONS.md` for
+why this differs from PyDaddy's own default). The binned estimates
+themselves are ordinary data frames:
+
+```{r}
+head(dd_drift(dd))
+head(dd_diffusion(dd))
+```
+
+## Fitting analytical expressions
+
+`dd_fit()` fits a sparse polynomial to the drift or diffusion function,
+using sequentially-thresholded ridge regression (the same approach as
+PyDaddy, minus the standard-error-computation bug documented in
+`DESIGN_DECISIONS.md`). It returns an updated copy of the `daddy` object
+with the fit attached — R objects aren't mutated in place, so you need to
+reassign:
+
+```{r}
+dd <- dd_fit(dd, "drift", degree = 3, threshold = 0.01)
+dd <- dd_fit(dd, "diffusion", degree = 2, threshold = 0.01)
+dd
+```
+
+## Visualizing the result
+
+```{r, eval = requireNamespace("ggplot2", quietly = TRUE) && requireNamespace("patchwork", quietly = TRUE)}
+plot(dd)
+```
+
+## Diagnostics
+
+Is the extracted noise consistent with a Gaussian white-noise assumption?
+
+```{r}
+dd_gaussianity_test(dd$estimate$diff_series)
+```
+
+And the autocorrelation structure of the raw series:
+
+```{r}
+ac <- dd_autocorrelation(d$x)
+ac$autocorr_time
+```
+
+## Exporting results
+
+```{r, eval = FALSE}
+dd_export_data(dd, file = "drift_diffusion.csv")
+```

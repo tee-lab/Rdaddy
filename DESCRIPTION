@@ -1,0 +1,36 @@
+Package: daddyR
+Title: Discover Stochastic Differential Equations from Time Series Data
+Version: 0.1.0
+Authors@R: c(
+    person("Vishwesha", "Guttal", email = "guttal@iisc.ac.in", role = c("aut", "cre")),
+    person("Arshed", "Nabeel", role = "aut"),
+    person("Ashwin", "Karichannavar", role = "aut"))
+Description: Estimates data-driven stochastic differential equations (SDEs)
+    from scalar and vector time series, following the drift-diffusion
+    (Kramers-Moyal) decomposition described in Nabeel, Karichannavar,
+    Palathingal, Jhawar, Bruckner, Danny Raj & Guttal (2025)
+    "Discovering stochastic dynamical equations from ecological time series
+    data", The American Naturalist, 205: E100-E117
+    <doi:10.1086/734083>. This is an R port of the 'PyDaddy' Python package
+    (<https://github.com/tee-lab/PyDaddy>), reimplemented natively in R with
+    a number of correctness fixes and API simplifications documented in
+    'DESIGN_DECISIONS.md'.
+License: GPL-3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends: R (>= 4.1)
+Imports:
+    grDevices,
+    stats,
+    utils
+Suggests:
+    ggplot2,
+    patchwork,
+    testthat,
+    knitr,
+    rmarkdown
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+URL: https://github.com/tee-lab/PyDaddy
+BugReports: https://github.com/tee-lab/PyDaddy/issues
+Config/roxygen2/version: 8.1.0

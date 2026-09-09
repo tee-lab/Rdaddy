@@ -1,0 +1,110 @@
+# ggplot2/patchwork are Suggests, not Imports (see DESCRIPTION), so plot.daddy()
+# below only calls them via `pkg::fn()` after an explicit requireNamespace()
+# check, and this file uses bare column names in aes() (standard tidy
+# evaluation) rather than `.data$col`, so as not to require an importFrom
+# binding to a package that might not be installed. The globalVariables()
+# call below just tells R CMD check that these bare names are intentional
+# (data-frame columns referenced via NSE), not typos.
+utils::globalVariables(c("t", "x", "op", "avg_drift", "drift_se", "avg_diff", "diff_se"))
+
+#' @export
+print.daddy <- function(x, ...) {
+  cat("<daddy> stochastic differential equation estimate\n")
+  cat(sprintf("  %d observations, t_int = %.4g\n", length(x$x), x$t_int))
+  cat(sprintf("  Dt = %d, dt = %d, bins = %d (autocorrelation time ~ %d samples)\n",
+              x$Dt, x$dt, x$bins, x$autocorr_time))
+  if (!is.null(x$fits$drift)) {
+    cat("  drift fit:     ", format(x$fits$drift), "\n")
+  } else {
+    cat("  drift fit:      (not fitted; see dd_fit(dd, \"drift\", degree = ...))\n")
+  }
+  if (!is.null(x$fits$diffusion)) {
+    cat("  diffusion fit: ", format(x$fits$diffusion), "\n")
+  } else {
+    cat("  diffusion fit:  (not fitted; see dd_fit(dd, \"diffusion\", degree = ...))\n")
+  }
+  invisible(x)
+}
+
+#' @export
+summary.daddy <- function(object, ...) {
+  drift_df <- dd_drift(object)
+  diff_df <- dd_diffusion(object)
+  cat("Summary of daddy object\n")
+  cat("========================\n")
+  print.daddy(object)
+  cat("\nBinned drift (order parameter range ", sprintf("[%.4g, %.4g]", min(drift_df$op), max(drift_df$op)), "):\n", sep = "")
+  print(utils::head(drift_df, 5))
+  if (nrow(drift_df) > 5) cat("  ... (", nrow(drift_df) - 5, " more rows)\n", sep = "")
+  cat("\nBinned diffusion:\n")
+  print(utils::head(diff_df, 5))
+  if (nrow(diff_df) > 5) cat("  ... (", nrow(diff_df) - 5, " more rows)\n", sep = "")
+  invisible(object)
+}
+
+#' Plot a daddy object
+#'
+#' Produces a four-panel summary figure: the raw time series, its histogram,
+#' the binned drift estimate (with the fitted polynomial overlaid if
+#' present), and the binned diffusion estimate (likewise).
+#'
+#' @param x A `"daddy"` object.
+#' @param n_points Number of leading time-series points to show in the
+#'   timeseries panel (default 1000, to keep the plot legible for long
+#'   series).
+#' @param ... Unused; present for S3 method consistency.
+#' @return A `patchwork` object (prints like a `ggplot`).
+#' @export
+plot.daddy <- function(x, n_points = 1000, ...) {
+  if (!requireNamespace("ggplot2", quietly = TRUE) ||
+      !requireNamespace("patchwork", quietly = TRUE)) {
+    stop("Plotting requires the 'ggplot2' and 'patchwork' packages.", call. = FALSE)
+  }
+
+  n_show <- min(n_points, length(x$x))
+  ts_df <- data.frame(t = seq_len(n_show) * x$t_int, x = x$x[seq_len(n_show)])
+
+  p_ts <- ggplot2::ggplot(ts_df, ggplot2::aes(x = t, y = x)) +
+    ggplot2::geom_line(linewidth = 0.3) +
+    ggplot2::labs(title = "Time series", x = "t", y = "x") +
+    ggplot2::theme_minimal()
+
+  p_hist <- ggplot2::ggplot(data.frame(x = x$x), ggplot2::aes(x = x)) +
+    ggplot2::geom_histogram(bins = 40, fill = "grey60", color = "white") +
+    ggplot2::labs(title = "Histogram", x = "x", y = "count") +
+    ggplot2::theme_minimal()
+
+  drift_df <- dd_drift(x)
+  p_drift <- ggplot2::ggplot(drift_df, ggplot2::aes(x = op, y = avg_drift)) +
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = avg_drift - drift_se,
+                                        ymax = avg_drift + drift_se),
+                            width = 0, color = "grey60") +
+    ggplot2::geom_point(size = 1.2) +
+    ggplot2::labs(title = "Drift", x = "x", y = expression(f(x))) +
+    ggplot2::theme_minimal()
+  if (!is.null(x$fits$drift)) {
+    xs <- seq(min(drift_df$op), max(drift_df$op), length.out = 200)
+    p_drift <- p_drift + ggplot2::geom_line(
+      data = data.frame(op = xs, avg_drift = stats::predict(x$fits$drift, xs)),
+      color = "steelblue", linewidth = 0.8
+    )
+  }
+
+  diff_df <- dd_diffusion(x)
+  p_diff <- ggplot2::ggplot(diff_df, ggplot2::aes(x = op, y = avg_diff)) +
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = avg_diff - diff_se,
+                                        ymax = avg_diff + diff_se),
+                            width = 0, color = "grey60") +
+    ggplot2::geom_point(size = 1.2) +
+    ggplot2::labs(title = "Diffusion", x = "x", y = expression(g^2*(x))) +
+    ggplot2::theme_minimal()
+  if (!is.null(x$fits$diffusion)) {
+    xs <- seq(min(diff_df$op), max(diff_df$op), length.out = 200)
+    p_diff <- p_diff + ggplot2::geom_line(
+      data = data.frame(op = xs, avg_diff = stats::predict(x$fits$diffusion, xs)),
+      color = "firebrick", linewidth = 0.8
+    )
+  }
+
+  (p_ts + p_hist) / (p_drift + p_diff)
+}
