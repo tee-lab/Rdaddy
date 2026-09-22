@@ -22,9 +22,11 @@ for a full account of where and why daddyR's behavior deviates from
 PyDaddy's (several of which are bug fixes; PyDaddy's current release does
 not run on numpy released since 2021 without patching, for instance).
 
-**Current scope (v0.1.0):** scalar (1D) time series only. Vector (2D) data,
-cross-diffusion, SDE simulation, and the full diagnostic suite are planned
-for later releases — see the project roadmap.
+**Current scope (v0.2.0):** scalar (1D) *and* vector (2D) time series,
+including cross-diffusion and SDE simulation (`dd_simulate()`). The full
+interactive diagnostic suite (self-consistency re-simulation plots,
+timescale sliders) is still planned for a later release — see the project
+roadmap and `DESIGN_DECISIONS.md`'s "Explicitly out of scope" section.
 
 ## Getting the code
 
@@ -128,8 +130,33 @@ dd <- dd_fit(dd, "diffusion", degree = 2, threshold = 0.01)
 print(dd)
 plot(dd)
 
-dd_gaussianity_test(dd$estimate$diff_series)
+dd_gaussianity_test(dd$estimate$noise_series)
 dd_autocorrelation(d$x)
+
+sim <- dd_simulate(dd, t_int = d$t_int, timepoints = 2000)
+```
+
+## Vector (2D) data
+
+The same workflow, for a bivariate series `(x1, x2)` (e.g. a particle's two
+coordinates, or two interacting population densities):
+
+```r
+dv <- dd_load_sample_data("vector-pairwise")
+ddv <- dd_analyse_vector(dv$x1, dv$x2, t = dv$t_int)
+print(ddv)
+
+ddv <- dd_fit(ddv, "F1", degree = 3, threshold = 0.01)
+ddv <- dd_fit(ddv, "F2", degree = 3, threshold = 0.01)
+ddv <- dd_fit(ddv, "G11", degree = 2, threshold = 0.01)
+ddv <- dd_fit(ddv, "G22", degree = 2, threshold = 0.01)
+ddv <- dd_fit(ddv, "G12", degree = 2, threshold = 0.01)
+print(ddv)
+plot(ddv)
+
+dd_gaussianity_test_vector(ddv)
+
+sim <- dd_simulate(ddv, t_int = dv$t_int, timepoints = 2000)  # a timepoints x 2 matrix
 ```
 
 ## Troubleshooting

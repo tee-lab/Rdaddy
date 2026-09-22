@@ -226,3 +226,174 @@ dd_tune_threshold <- function(x, y, degree, thresholds = NULL, alpha = 0,
   attr(fit, "cv_curve") <- data.frame(threshold = thresholds, cv_error = cv_errors)
   fit
 }
+
+# ---------------------------------------------------------------------------
+# Two-variable ("poly2d") polynomials, for the vector-data case. dd_stlsq()
+# and dd_ridge_fit() above are already dimension-agnostic -- they just fit a
+# design matrix -- so the only new machinery needed here is the 2-variable
+# dictionary construction and a poly2d analogue of poly1d's S3 methods.
+# ---------------------------------------------------------------------------
+
+#' Powers of `x1`/`x2` for each term of a 2-variable polynomial
+#'
+#' Terms are ordered by ascending total degree, and within each total degree
+#' by descending power of `x1` (e.g. for `degree = 2`:
+#' `1, x1, x2, x1^2, x1*x2, x2^2`). This is a genuine total-degree basis
+#' (`p1 + p2 <= degree`), matching PyDaddy's own vector dictionary in spirit
+#' (same term set, a different but equally arbitrary ordering) -- the
+#' ordering only matters for reading off `format()`/coefficient positions,
+#' not for the fit itself, since OLS/ridge regression on a given term set has
+#' a unique solution regardless of column order.
+#'
+#' @return An integer matrix with columns `p1`, `p2`.
+#' @keywords internal
+dd_poly2d_powers <- function(degree) {
+  p1 <- integer(0); p2 <- integer(0)
+  for (d in 0:degree) {
+    for (p in 0:d) {
+      p1 <- c(p1, d - p)
+      p2 <- c(p2, p)
+    }
+  }
+  cbind(p1 = p1, p2 = p2)
+}
+
+#' Build a 2-variable polynomial design matrix (total degree `<= degree`)
+#' @keywords internal
+dd_poly_dictionary2d <- function(x1, x2, degree) {
+  powers <- dd_poly2d_powers(degree)
+  vapply(seq_len(nrow(powers)), function(i) {
+    x1^powers[i, 1] * x2^powers[i, 2]
+  }, numeric(length(x1)))
+}
+
+#' A short label like `"x1^2 x2"` for one `(p1, p2)` term
+#' @keywords internal
+dd_poly2d_term_label <- function(p1, p2) {
+  t1 <- if (p1 == 0) "" else if (p1 == 1) "x1" else paste0("x1^", p1)
+  t2 <- if (p2 == 0) "" else if (p2 == 1) "x2" else paste0("x2^", p2)
+  if (nzchar(t1) && nzchar(t2)) paste0(t1, " ", t2) else paste0(t1, t2)
+}
+
+#' A fitted 2-variable ("poly2d") polynomial
+#'
+#' @param coeffs Numeric coefficient vector, ordered per [dd_poly2d_powers()].
+#' @param degree Integer, the polynomial's total degree.
+#' @param stderr Optional standard errors, same length as `coeffs`.
+#' @return An object of class `poly2d`.
+#' @keywords internal
+new_poly2d <- function(coeffs, degree, stderr = NULL) {
+  structure(list(coeffs = coeffs, degree = degree, stderr = stderr), class = "poly2d")
+}
+
+#' @export
+predict.poly2d <- function(object, x1, x2, ...) {
+  dict <- dd_poly_dictionary2d(x1, x2, object$degree)
+  as.vector(dict %*% object$coeffs)
+}
+
+#' @export
+format.poly2d <- function(x, digits = 3, ...) {
+  powers <- dd_poly2d_powers(x$degree)
+  terms <- character(0)
+  for (i in rev(seq_len(nrow(powers)))) {
+    c_val <- x$coeffs[i]
+    if (c_val == 0) next
+    term <- dd_poly2d_term_label(powers[i, 1], powers[i, 2])
+    if (!is.null(x$stderr) && is.finite(x$stderr[i])) {
+      coef_str <- sprintf("(%.*f \u00B1 %.*f)", digits, c_val, digits, x$stderr[i])
+    } else {
+      coef_str <- sprintf("%.*f", digits, c_val)
+    }
+    terms <- c(terms, if (nzchar(term)) paste0(coef_str, " ", term) else coef_str)
+  }
+  if (length(terms) == 0) return("0")
+  paste(terms, collapse = " + ")
+}
+
+#' @export
+print.poly2d <- function(x, ...) {
+  cat(format(x), "\n")
+  invisible(x)
+}
+
+#' Fit a sparse 2-variable polynomial to `(x1, x2, y)` data
+#'
+#' The vector-data analogue of [dd_fit_polynomial()]: fits `y` as a sparse
+#' polynomial in two variables `x1`, `x2`, up to total degree `degree`, via
+#' the same sequentially-thresholded ridge regression ([dd_stlsq()]).
+#'
+#' @param x1,x2 Numeric vectors of equal length (the two predictors).
+#' @param y Numeric vector, the response.
+#' @param degree Integer, maximum total polynomial degree.
+#' @param threshold Numeric >= 0, sparsity threshold (default 0: an ordinary,
+#'   non-sparse fit).
+#' @param alpha Numeric >= 0, ridge regularization strength.
+#' @param weights Optional sample weights.
+#' @return A `poly2d` object.
+#' @export
+dd_fit_polynomial2d <- function(x1, x2, y, degree, threshold = 0, alpha = 0, weights = NULL) {
+  ok <- is.finite(x1) & is.finite(x2) & is.finite(y)
+  x1 <- x1[ok]; x2 <- x2[ok]; y <- y[ok]
+  n_terms <- (degree + 1) * (degree + 2) / 2
+  if (length(x1) <= n_terms) {
+    stop("Not enough finite data points (", length(x1), ") to fit a total-degree-",
+         degree, " 2-variable polynomial (", n_terms, " terms).", call. = FALSE)
+  }
+  dict <- dd_poly_dictionary2d(x1, x2, degree)
+  fit <- dd_stlsq(dict, y, threshold = threshold, alpha = alpha, weights = weights)
+  new_poly2d(fit$coeffs, degree, fit$stderr)
+}
+
+#' K-fold cross-validation error for a 2-variable polynomial fit
+#' @keywords internal
+dd_cv_error2d <- function(x1, x2, y, degree, threshold, alpha = 0, folds = 5) {
+  n <- length(x1)
+  base_size <- n %/% folds
+  extra <- n %% folds
+  fold_sizes <- rep(base_size, folds) + c(rep(1L, extra), rep(0L, folds - extra))
+  fold_id <- rep(seq_len(folds), times = fold_sizes)
+  n_terms <- (degree + 1) * (degree + 2) / 2
+  errs <- numeric(folds)
+  for (k in seq_len(folds)) {
+    test <- fold_id == k
+    train <- !test
+    if (sum(train) <= n_terms || sum(test) == 0) { errs[k] <- NA_real_; next }
+    fit <- dd_fit_polynomial2d(x1[train], x2[train], y[train], degree,
+                                threshold = threshold, alpha = alpha)
+    pred <- stats::predict(fit, x1[test], x2[test])
+    errs[k] <- mean((y[test] - pred)^2)
+  }
+  mean(errs, na.rm = TRUE)
+}
+
+#' Choose a sparsity threshold by cross-validation (2-variable case)
+#'
+#' The vector-data analogue of [dd_tune_threshold()]; see there for the
+#' elbow-heuristic rationale.
+#'
+#' @inheritParams dd_fit_polynomial2d
+#' @param thresholds Optional numeric vector of candidate thresholds.
+#' @param steps Number of thresholds to try when `thresholds` is `NULL`.
+#' @param folds Number of cross-validation folds.
+#' @return A `poly2d` object, fit at the chosen threshold.
+#' @export
+dd_tune_threshold2d <- function(x1, x2, y, degree, thresholds = NULL, alpha = 0,
+                                 steps = 20, folds = 5) {
+  if (is.null(thresholds)) {
+    fit0 <- dd_fit_polynomial2d(x1, x2, y, degree, threshold = 0, alpha = alpha)
+    max_coef <- max(abs(fit0$coeffs))
+    thresholds <- seq(0, max_coef, length.out = steps + 1)[seq_len(steps)]
+  }
+  cv_errors <- vapply(thresholds, function(th) {
+    dd_cv_error2d(x1, x2, y, degree, threshold = th, alpha = alpha, folds = folds)
+  }, numeric(1))
+
+  delta <- diff(cv_errors)
+  best_threshold <- if (all(is.na(delta))) thresholds[1] else thresholds[which.max(delta)]
+
+  fit <- dd_fit_polynomial2d(x1, x2, y, degree, threshold = best_threshold, alpha = alpha)
+  attr(fit, "threshold") <- best_threshold
+  attr(fit, "cv_curve") <- data.frame(threshold = thresholds, cv_error = cv_errors)
+  fit
+}

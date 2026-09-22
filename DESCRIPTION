@@ -1,6 +1,6 @@
 Package: daddyR
 Title: Discover Stochastic Differential Equations from Time Series Data
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: c(
     person("Vishwesha", "Guttal", email = "guttal@iisc.ac.in", role = c("aut", "cre")),
     person("Arshed", "Nabeel", role = "aut"),
@@ -18,6 +18,7 @@ Description: Estimates data-driven stochastic differential equations (SDEs)
 License: GPL-3
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
 Depends: R (>= 4.1)
 Imports:
     grDevices,
@@ -31,6 +32,5 @@ Suggests:
     rmarkdown
 Config/testthat/edition: 3
 VignetteBuilder: knitr
-URL: https://github.com/tee-lab/PyDaddy
-BugReports: https://github.com/tee-lab/PyDaddy/issues
-Config/roxygen2/version: 8.1.0
+URL: https://github.com/tee-lab/Rdaddy, https://github.com/tee-lab/PyDaddy
+BugReports: https://github.com/tee-lab/Rdaddy/issues

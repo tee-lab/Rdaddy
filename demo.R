@@ -38,7 +38,7 @@ print(plot(dd))
 
 ## 7. Diagnostics ---------------------------------------------------------------
 cat("\nIs the extracted noise consistent with Gaussian white noise?\n")
-print(dd_gaussianity_test(dd$estimate$diff_series))
+print(dd_gaussianity_test(dd$estimate$noise_series))
 
 cat("\nAutocorrelation time of the raw series:\n")
 ac <- dd_autocorrelation(d$x)
@@ -59,3 +59,48 @@ dd2 <- dd_fit(dd2, "drift", degree = 3, threshold = 0.01)
 dd2 <- dd_fit(dd2, "diffusion", degree = 2, threshold = 0.01)
 print(dd2)
 print(plot(dd2))
+
+## 10. Simulate a synthetic trajectory from the fitted scalar model ------------
+cat("\n\n--- Simulating from the fitted scalar model (dd) ---\n")
+sim <- dd_simulate(dd, t_int = d$t_int, timepoints = 2000, x0 = 0)
+cat("Simulated", length(sim), "points; range:",
+    paste(round(range(sim), 3), collapse = " to "), "\n")
+
+## 11. Vector (2D) workflow -----------------------------------------------------
+cat("\n\n--- Vector (2D) workflow, on the 'vector-pairwise' dataset ---\n")
+dv <- dd_load_sample_data("vector-pairwise")
+cat("Loaded", length(dv$x1), "points (2D), t_int =", dv$t_int, "\n")
+
+ddv <- dd_analyse_vector(dv$x1, dv$x2, t = dv$t_int)
+print(ddv)
+cat("\n")
+
+cat("First few rows of the binned drift estimate:\n")
+print(head(dd_drift(ddv)))
+cat("\nFirst few rows of the binned diffusion estimate:\n")
+print(head(dd_diffusion(ddv)))
+
+ddv <- dd_fit(ddv, "F1", degree = 3, threshold = 0.01)
+ddv <- dd_fit(ddv, "F2", degree = 3, threshold = 0.01)
+ddv <- dd_fit(ddv, "G11", degree = 2, threshold = 0.01)
+ddv <- dd_fit(ddv, "G22", degree = 2, threshold = 0.01)
+ddv <- dd_fit(ddv, "G12", degree = 2, threshold = 0.01)
+cat("\nFitted F1(x1,x2)  =", format(ddv$fits$F1), "\n")
+cat("Fitted F2(x1,x2)  =", format(ddv$fits$F2), "\n")
+cat("Fitted G11(x1,x2) =", format(ddv$fits$G11), "\n")
+cat("Fitted G22(x1,x2) =", format(ddv$fits$G22), "\n")
+cat("Fitted G12(x1,x2) =", format(ddv$fits$G12), "\n\n")
+
+summary(ddv)
+
+cat("\nPhase-portrait + drift/diffusion heatmaps (RStudio Plots pane):\n")
+print(plot(ddv))
+
+cat("\nGaussianity test on each noise component:\n")
+print(dd_gaussianity_test_vector(ddv))
+
+cat("\nSimulating a synthetic 2D trajectory from the fitted vector model:\n")
+simv <- dd_simulate(ddv, t_int = dv$t_int, timepoints = 2000, x0 = c(0, 0))
+cat("Simulated", nrow(simv), "points; x1 range:",
+    paste(round(range(simv[, "x1"]), 3), collapse = " to "),
+    "  x2 range:", paste(round(range(simv[, "x2"]), 3), collapse = " to "), "\n")

@@ -188,11 +188,125 @@ session; it has been dropped in favor of the plain function-based API
 (a Shiny app for interactive exploration is a possible future addition,
 tracked in the porting roadmap, rather than a command-line tool).
 
-## Explicitly out of scope for this phase
+## Phase 2: vector (2D) data and SDE simulation
 
-Vector (2D) data, cross-diffusion, SDE simulation (`simulate()`), the full
-diagnostic suite (`model_diagnostics()`, the noise-autocorrelation and
-residual QQ-plot panels), and the interactive timescale-slider views are not
-in this port yet — see the porting roadmap document for the planned phases.
-Nothing above should be read as claiming feature parity; it's a list of
-deliberate differences within the scope this phase does cover.
+PyDaddy's vector code path (mostly `sde.py`'s `SDE._vector_drift_diff` and
+`daddy.py`'s `Daddy.simulate()`) has its own set of idiosyncrasies, beyond
+the ones already fixed for the scalar case above.
+
+**17. Vector binning has the scalar bin-edge bug (item 3), plus a
+closed-interval double-counting bug of its own.** PyDaddy's 2D bin-edge
+width (`inc_x`/`inc_y`) is computed as `(max-min)/bins` while the reported
+bin locations use `np.linspace(..., bins)` — the same mismatch as item 3,
+now confirmed on both axes. Separately, its 2D bin-membership test is
+*closed on both ends* (`bin_x <= x & x <= bin_x + inc_x`), unlike its own
+scalar test (`X_ < b+inc`, half-open) — so a point sitting exactly on a
+shared edge between two bins is counted in **both**. `dd_estimate_vector()`
+reuses [`dd_bin_index()`](R/estimate.R)'s half-open, exactly-tiling bins for
+both axes, fixing both issues the same way item 3 fixed them for the scalar
+case.
+
+**18. Binned-average matrices are filled and read with inconsistent
+transpose conventions.** PyDaddy declares `avgdriftX`/`avgdriftY`/etc. as
+shape `(nx, ny)` but fills them `[y_bin, x_bin]` (the transpose of what the
+declared shape suggests) — self-consistent within `sde.py` (the lookup
+during diffusion estimation uses the same convention), but a *different*
+diagnostic function elsewhere in PyDaddy (`Daddy.noise_diagnostics()`'s
+residual computation) indexes the same arrays `[x_bin, y_bin]`, silently
+reading the wrong bin's average drift whenever a point's x- and y-bin
+indices differ. `dd_estimate_vector()` uses one explicit convention
+everywhere — every matrix it returns is indexed `[bin_x, bin_y]` — so there
+is no second, inconsistent reader to get out of sync.
+
+**19. The diffusion matrix estimator conflates the drift and diffusion
+timescales.** PyDaddy's vector diffusion formula lags the raw increment
+by `Dt` (the *drift* timescale) but divides by `dt` (the *diffusion*
+timescale) — structurally different from its own scalar fast-mode formula,
+and only numerically equivalent to it when `Dt == dt`. (A related, purely
+mechanical bug: `Daddy.fit()` slices its covariate matrix by `self.dt` when
+fitting `G11`/`G22`/`G12`, but the target arrays it's pairing that with were
+actually built with length `N - Dt`, not `N - dt` — a shape mismatch that
+raises an error from the regression call whenever `Dt != dt`.)
+`dd_estimate_vector()` instead extends the *scalar* residual formula (each
+point's own bin's average drift, scaled by `t_int` only) to two dimensions,
+then lags the resulting residual series by `dt` for `G11`, `G22`, *and*
+`G12` — keeping `Dt` and `dt` independently meaningful, exactly as in the
+scalar case, and avoiding the alignment bug entirely since every fit pairs
+`x`/`y` arrays daddyR computed together (same fix as item 5). Note this
+formula happens to numerically coincide with PyDaddy's own vector formula
+whenever `Dt == 1` (the common case, and what the reference-value tests
+use), since the two `Dt`-related terms cancel — the difference only shows up
+once `Dt > 1`.
+
+**20. No separate "G21".** Because a real diffusion matrix built this way is
+symmetric by construction (`G12` and `G21` are the same
+`residual1 * residual2` product), PyDaddy nonetheless carries "G21" as a
+distinct fittable quantity throughout its API and simply forces it to equal
+whatever `G12` was fit to (`daddy.py`'s `fit()`, `G21 = G12` whenever
+`'G12'`/`'G21'` is requested) — a redundant concept that only creates a
+chance to set one without the other. `dd_fit()` doesn't expose a `"G21"`
+option at all; `G12` is used for both off-diagonal entries wherever the
+full matrix is needed (e.g. [`dd_simulate()`]'s vector path).
+
+**21. No safety check before taking the diffusion matrix's square root
+during simulation.** `Daddy.simulate()` calls `scipy.linalg.sqrtm(G)`
+directly, reacting only if that call happens to raise `LinAlgError` or
+`ValueError` — but `sqrtm` isn't guaranteed to raise on an indefinite
+matrix; it can silently return a matrix with a nonzero imaginary part, which
+then propagates into the simulated trajectory as `NaN`/complex values with
+no clear error. This is a real risk here, not a hypothetical one: the fitted
+`G11`/`G22`/`G12` are unconstrained polynomials that can evaluate to an
+invalid (indefinite) matrix once a simulated trajectory drifts outside the
+range of the original training data. (PyDaddy also only clamps the diagonal
+terms with `abs()` in its no-cross-term fallback branch, not in the
+general `sqrtm` branch — an inconsistency of its own.) `dd_matrix_sqrt_psd()`
+always computes the symmetric square root via eigendecomposition and
+explicitly clips any negative eigenvalue to zero (with a warning when this
+actually happens), so [`dd_simulate()`] always produces a finite, real
+trajectory, uniformly for the diagonal-only and cross-diffusion cases alike.
+
+**22. One integrator, used consistently.** PyDaddy's `simulate()` uses a
+higher-order stochastic Runge-Kutta scheme (`sdeint.itoSRI2`) for scalar
+data but plain Euler-Maruyama (`sdeint.itoEuler`) for vector data — an
+asymmetry with no documented rationale. `dd_simulate()` uses Euler-Maruyama
+for both, via the shared `dd_matrix_sqrt_psd()`-based noise construction;
+this is simpler and consistent, at the cost of Euler-Maruyama's lower strong
+convergence order (use a smaller `t_int` than you might otherwise need for
+high-precision work).
+
+**23. Standard errors for the 2D polynomial fits get item 7's fix "for
+free."** PyDaddy's `PolyFitBase.fit()` (shared, unmodified, between its 1D
+and 2D fitters) inverts the *full* candidate dictionary rather than the
+sparsified active-term submatrix when computing coefficient standard
+errors — the same bug as item 7, and if anything more likely to bite for
+the vector case, since a 2D polynomial dictionary has more, more collinear
+terms. Because daddyR's `dd_fit_polynomial2d()` reuses the same
+`dd_stlsq()` used by the scalar `dd_fit_polynomial()`, it already inverts
+only the active submatrix (with the same `NA`-and-warning fallback on
+singularity) — no vector-specific fix was needed here.
+
+**24. Gaussianity testing exposed for the vector case too (and a related
+scalar fix).** `dd_estimate_vector()` returns `noise1`/`noise2`: the
+pre-squared, drift-corrected residual series for each component — the
+statistically appropriate input to [`dd_gaussianity_test()`] (as opposed to
+`diff11_series`/`diff22_series`, which are already squared and so should not
+themselves be tested for normality). `dd_gaussianity_test_vector()` is a
+thin convenience wrapper running the test on both components.
+`dd_estimate()`'s scalar output gained the analogous `noise_series` field at
+the same time, for the same reason — this was a latent issue in the 0.1.0
+release (nothing there was actually *wrong*, since `dd_gaussianity_test()`
+takes whatever vector it's given, but the demo/documentation's suggested
+usage tested the already-squared `diff_series`). Whether the *test itself*
+(item 6's KS-test replacement) is the right choice is still open for your
+review; this item is only about testing the right quantity, whichever test
+is used.
+
+## Explicitly out of scope
+
+Cross-validated automatic degree selection (see item 9), the full
+interactive diagnostic suite (`model_diagnostics()`'s simulate-and-re-
+estimate self-consistency plots, the noise-autocorrelation and residual
+QQ-plot panels, and the interactive timescale-slider views), and a
+console/Shiny UI are not in this port yet. Nothing above should be read as
+claiming feature parity; it's a list of deliberate differences within the
+scope covered so far.

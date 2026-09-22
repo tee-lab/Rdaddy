@@ -33,8 +33,8 @@ dd_autocorrelation <- function(x, lags = min(1000L, length(x) - 1L)) {
 #' checking whether the same quantity computed between the real residual and
 #' a fresh normal sample falls within the 2.5-97.5 percentile band of that
 #' null. This is not actually an estimate of KL divergence between
-#' distributions — real KL divergence requires a density or probability mass
-#' function, not raw samples plugged into the divergence formula — so the
+#' distributions -- real KL divergence requires a density or probability mass
+#' function, not raw samples plugged into the divergence formula -- so the
 #' resulting test statistic doesn't have a clean interpretation, and (as a
 #' secondary issue) the reference implementation also calls
 #' `numpy.histogram(..., normed=True)`, an argument numpy removed years ago,
@@ -65,5 +65,26 @@ dd_gaussianity_test <- function(residual, alpha = 0.05) {
     p_value = test$p.value,
     is_gaussian = test$p.value > alpha,
     n = length(residual)
+  )
+}
+
+#' Gaussianity test for both noise components of a vector daddy object
+#'
+#' Convenience wrapper applying [dd_gaussianity_test()] to each component's
+#' extracted noise series (`dd$estimate$noise1`, `dd$estimate$noise2`) --
+#' the pre-squared drift-corrected residual, which is what should be
+#' Gaussian under the SDE model, as opposed to the squared quantities
+#' (`diff11_series`, `diff22_series`) used to estimate the diffusion matrix.
+#'
+#' @param dd A `"daddy"` object from [dd_analyse_vector()].
+#' @param alpha Significance level for the test (default 0.05).
+#' @return A list with `x1` and `x2`, each the result of
+#'   [dd_gaussianity_test()] on that component's noise series.
+#' @export
+dd_gaussianity_test_vector <- function(dd, alpha = 0.05) {
+  stopifnot(inherits(dd, "daddy"), isTRUE(dd$vector))
+  list(
+    x1 = dd_gaussianity_test(dd$estimate$noise1, alpha = alpha),
+    x2 = dd_gaussianity_test(dd$estimate$noise2, alpha = alpha)
   )
 }
